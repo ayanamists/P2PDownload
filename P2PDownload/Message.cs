@@ -4,8 +4,9 @@ using System.Security.Cryptography;
 using System.IO;
 using BinarySerialization;
 using System.Diagnostics;
+using System.Collections.Generic;
 
-namespace P2PDownload
+namespace Toy
 {
     enum P2PMessageType 
     {
@@ -16,7 +17,8 @@ namespace P2PDownload
         ERROR,
         FILE_INFO,
         BLOCK_INFO,
-        GET_OK
+        GET_OK,
+        CLOSE
     }
     class P2PMessage
     {
@@ -52,9 +54,63 @@ namespace P2PDownload
                     return new BlockInfoMessage(i);
                 case 7:
                     return new OKMessage(i);
+                case 8:
+                    return new CloseMessage(); 
                 default:
-                    throw new Exception("not allow");
+                    throw new System.Exception("not allow");
             }
+        }
+        static public List<P2PMessage> GenFromMS(MemoryStream ms)
+        {
+            var now_pos = 0;
+            List<P2PMessage> ret = new List<P2PMessage>();
+            while (now_pos < ms.Length) {
+                var buffer_head = new byte[8];
+                ms.Read(buffer_head, 0, 8);
+                var length = BitConverter.ToInt32(buffer_head, 4);
+                var buffer_tail = new byte[length];
+                ms.Read(buffer_tail, 0, length);
+                var now_item = new P2PMessage();
+                var type_value = BitConverter.ToInt32(buffer_head);
+                switch (type_value)
+                {
+                    case 0:
+                        now_item = new GetDataMessage(buffer_head);
+                        break;
+                    case 1:
+                        now_item = new GetFileInfoMessage(buffer_head);
+                        break;
+                    case 2:
+                        now_item = new GetBlockInfoMessage(buffer_head);
+                        break;
+                    case 3:
+                        now_item =  new DataMessage(buffer_head);
+                        break;
+                    case 4:
+                        now_item = new ErrorMessage(buffer_head);
+                        break;
+                    case 5:
+                        now_item =  new FileInfoMessage(buffer_head);
+                        break;
+                    case 6:
+                        now_item = new BlockInfoMessage(buffer_head);
+                        break;
+                    case 7:
+                        now_item = new OKMessage(buffer_head);
+                        break;
+                    case 8:
+                        now_item = new CloseMessage();
+                        break;
+                    default:
+                        throw new System.Exception("not allow");
+                }
+                now_item.type = (P2PMessageType)type_value;
+                ret.Add(now_item);
+                now_pos += 8 + length;
+                ms.Position = now_pos;
+            }
+            Debug.Assert(now_pos == ms.Length);
+            return ret;
         }
     }
     class GetDataMessage : P2PMessage
@@ -293,6 +349,15 @@ namespace P2PDownload
         public OKMessage(byte[] buffer)
         {
             block = new BlockInfo(buffer);
+        }
+    }
+
+    class CloseMessage : P2PMessage
+    {
+        public CloseMessage()
+        {
+            type = P2PMessageType.CLOSE;
+            length = 0;
         }
     }
     
