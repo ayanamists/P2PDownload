@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Toy": {
+      "commandName": "Project",
+      "commandLineArgs": "-D \"test4.pdf.meta\""
+    }
+  }
+}
