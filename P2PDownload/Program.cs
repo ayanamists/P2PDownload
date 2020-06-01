@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Net;
 
+
 namespace Toy
 {
     class Program
@@ -12,7 +13,7 @@ namespace Toy
         static FileMetaData ParseFromFile(string path)
         {
             var str = File.ReadAllText(path);
-            return new FileMetaData(str);
+            return FileMetaData.Deserialize(str);
         }
         static void Main(string[] args)
         {
@@ -40,12 +41,14 @@ namespace Toy
                         var name = args[i];
                         var ip = IPAddress.Parse(args[++i]);
                         var name_b = Encoding.UTF8.GetBytes(name);
+                        var length = 0;
                         using (var fs = File.Open(name, FileMode.Open))
                         {
-                            FileMetaData data = new FileMetaData(name,
-                                SHA256.Create().ComputeHash(name_b), ip, (int)fs.Length);
-                            File.WriteAllText(name + ".meta", data.Serialize());
+                            length = (int)fs.Length;
                         }
+                        FileMetaData data = new FileMetaData(name,
+                                SHA256.Create().ComputeHash(name_b), ip, length);
+                        File.WriteAllText(name + ".meta", FileMetaData.Serialize(data));
                         i++;
                     }
                     else
@@ -60,7 +63,11 @@ namespace Toy
                     return;
                 }
             }
-            if(downloadList.Count != 0 || uploadList.Count != 0)
+
+            // 初始化工作
+            LocalIP.Init();
+            Logger.Init();
+            if (downloadList.Count != 0 || uploadList.Count != 0)
             {
                 var fmanager = new FileManager();
                 var client = new Client(downloadList, uploadList, fmanager);

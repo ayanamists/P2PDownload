@@ -5,6 +5,7 @@ using System.IO;
 using BinarySerialization;
 using System.Diagnostics;
 using System.Collections.Generic;
+using log4net;
 
 namespace Toy
 {
@@ -18,7 +19,8 @@ namespace Toy
         FILE_INFO,
         BLOCK_INFO,
         GET_OK,
-        CLOSE
+        CLOSE,
+        ALIVE
     }
     class P2PMessage
     {
@@ -31,75 +33,94 @@ namespace Toy
             type = type_value;
             length = length_value;
         }
-        static public P2PMessage GenFromBuffer(byte[] buffer)
+        static public P2PMessage GenFromBuffer(byte[] buffer, int size)
         {
-            var length = BitConverter.ToInt32(buffer, 4);
-            var i = new Byte[length];
-            Array.Copy(buffer, 8, i, 0, length);
-            switch (BitConverter.ToInt32(buffer))
+            return new P2PMessage();
+        }
+        static public P2PMessage GenFromSocket(System.Net.Sockets.NetworkStream stream, int type_value, int length)
+        {
+            P2PMessage ret;
+            var buffer = new byte[length];
+            stream.Read(buffer, 0, length);
+            switch (type_value)
             {
                 case 0:
-                    return new GetDataMessage(i);
+                    ret = new GetDataMessage(buffer);
+                    break;
                 case 1:
-                    return new GetFileInfoMessage(i);
+                    ret = new GetFileInfoMessage(buffer);
+                    break;
                 case 2:
-                    return new GetBlockInfoMessage(i);
+                    ret = new GetBlockInfoMessage(buffer);
+                    break;
                 case 3:
-                    return new DataMessage(i);
+                    ret = new DataMessage(buffer);
+                    break;
                 case 4:
-                    return new ErrorMessage(i);
+                    ret = new ErrorMessage(buffer);
+                    break;
                 case 5:
-                    return new FileInfoMessage(i);
+                    ret = new FileInfoMessage(buffer);
+                    break;
                 case 6:
-                    return new BlockInfoMessage(i);
+                    ret = new BlockInfoMessage(buffer);
+                    break;
                 case 7:
-                    return new OKMessage(i);
+                    ret = new OKMessage(buffer);
+                    break;
                 case 8:
-                    return new CloseMessage(); 
+                    ret = new CloseMessage();
+                    break;
                 default:
                     throw new System.Exception("not allow");
             }
+            return ret;
         }
         static public List<P2PMessage> GenFromMS(MemoryStream ms)
         {
             var now_pos = 0;
             List<P2PMessage> ret = new List<P2PMessage>();
-            while (now_pos < ms.Length) {
+            var max_pos = ms.Position;
+            ms.Position = 0;
+            while (now_pos < max_pos) {
                 var buffer_head = new byte[8];
                 ms.Read(buffer_head, 0, 8);
                 var length = BitConverter.ToInt32(buffer_head, 4);
+                var type_value = BitConverter.ToInt32(buffer_head);
                 var buffer_tail = new byte[length];
                 ms.Read(buffer_tail, 0, length);
                 var now_item = new P2PMessage();
-                var type_value = BitConverter.ToInt32(buffer_head);
                 switch (type_value)
                 {
                     case 0:
-                        now_item = new GetDataMessage(buffer_head);
+                        now_item = new GetDataMessage(buffer_tail);
                         break;
                     case 1:
-                        now_item = new GetFileInfoMessage(buffer_head);
+                        now_item = new GetFileInfoMessage(buffer_tail);
                         break;
                     case 2:
-                        now_item = new GetBlockInfoMessage(buffer_head);
+                        now_item = new GetBlockInfoMessage(buffer_tail);
                         break;
                     case 3:
-                        now_item =  new DataMessage(buffer_head);
+                        now_item =  new DataMessage(buffer_tail);
                         break;
                     case 4:
-                        now_item = new ErrorMessage(buffer_head);
+                        now_item = new ErrorMessage(buffer_tail);
                         break;
                     case 5:
-                        now_item =  new FileInfoMessage(buffer_head);
+                        now_item =  new FileInfoMessage(buffer_tail);
                         break;
                     case 6:
-                        now_item = new BlockInfoMessage(buffer_head);
+                        now_item = new BlockInfoMessage(buffer_tail);
                         break;
                     case 7:
-                        now_item = new OKMessage(buffer_head);
+                        now_item = new OKMessage(buffer_tail);
                         break;
                     case 8:
                         now_item = new CloseMessage();
+                        break;
+                    case 9:
+                        now_item = new AliveMessage();
                         break;
                     default:
                         throw new System.Exception("not allow");
@@ -107,10 +128,13 @@ namespace Toy
                 now_item.type = (P2PMessageType)type_value;
                 ret.Add(now_item);
                 now_pos += 8 + length;
-                ms.Position = now_pos;
             }
-            Debug.Assert(now_pos == ms.Length);
+            Debug.Assert(now_pos == max_pos);
             return ret;
+        }
+        static public int TryParseHeader(byte[] header)
+        {
+            return BitConverter.ToInt32(header, 4);
         }
     }
     class GetDataMessage : P2PMessage
@@ -184,7 +208,7 @@ namespace Toy
         {
             type = P2PMessageType.GET_BLOCK_INFO;
             BlockInfo = new BlockInfo(hash_of_file, index_value);
-            length = hash_of_file.Length + 8;
+            length = BlockInfo.GetSize();
         }
         public GetBlockInfoMessage(byte[] buffer)
         {
@@ -211,13 +235,11 @@ namespace Toy
         }
         public P2PData(byte[] buffer)
         {
-            var i = new byte[32];
-            Array.Copy(buffer, 0, i, 0, 32);
-            var index = 0;
-            index = BitConverter.ToInt32(buffer, 32);
-            var data = new byte[4096];
+            var i = new byte[BlockInfo.GetSize()];
+            Array.Copy(buffer, 0, i, 0, BlockInfo.GetSize());
+            block = new BlockInfo(i);
+            data = new byte[4096];
             Array.Copy(buffer, 36, data, 0, 4096);
-            block = new BlockInfo(i, index);
         }
         static public int GetSize()
         {
@@ -264,11 +286,12 @@ namespace Toy
         public Int32[] indexs;
         [FieldOrder(3)]
         public byte[] hash;
-        public FileLocateInfo(IPAddress locate_value, byte[] hash, Int32[] indexs_value)
+        public FileLocateInfo(IPAddress locate_value, byte[] hash_value, Int32[] indexs_value)
         {
             locate = locate_value.GetAddressBytes();
             indexs = indexs_value;
             count = indexs.Length;
+            hash = hash_value;
         }
         public FileLocateInfo(byte[] locate_value, byte[] hash_value,
             Int32 count_value, Int32[] indexs_value)
@@ -280,46 +303,58 @@ namespace Toy
         }
         public int GetSize()
         {
-            return 32 + 4 + indexs.Length * 4;
+            return 4 + 32 + 4 + indexs.Length * 4;
         }
     }
     class FileInfoMessage : P2PMessage
     {
+        [FieldOrder(0)]
+        public int count;
+        [FieldOrder(1)]
         public FileLocateInfo[] locateInfos;
+        static ILog _logger = Logger.GetLogger(typeof(FileInfoMessage));
         public FileInfoMessage(FileLocateInfo[] fileLocateInfos)
         {
             type = P2PMessageType.FILE_INFO;
             locateInfos = fileLocateInfos;
-            length = 0;
+            length = 4;
             foreach(var i in locateInfos)
             {
                 length += i.GetSize();
             }
+            count = fileLocateInfos.Length;
         }
         public FileInfoMessage(byte[] buffer)
         {
-            var index_now = 0;
-            locateInfos = new FileLocateInfo[4];
+            type = P2PMessageType.FILE_INFO;
+            var index_now = 4;
+            count = BitConverter.ToInt32(buffer, 0);
+            locateInfos = new FileLocateInfo[count];
             int l_count = 0;
             while(index_now < buffer.Length)
             {
                 var locate = new byte[4];
                 Array.Copy(buffer, 0 + index_now, locate, 0, 4);
                 index_now += 4;
-                var count = 0;
-                count = BitConverter.ToInt32(buffer, index_now);
-                var indexs = new Int32[count];
-                for(int i = 0; i < count; ++i)
+                var countOfIndexs = 0;
+                countOfIndexs = BitConverter.ToInt32(buffer, index_now);
+                index_now += 4;
+                var indexs = new Int32[countOfIndexs];
+                var i = 0;
+                for(; i < countOfIndexs; ++i)
                 {
                     indexs[i] = BitConverter.ToInt32(buffer, index_now);
                     index_now += 4;
                 }
                 var hash = new byte[32];
+                _logger.Info($"i is {i}, countOfIndexs is {countOfIndexs}, index_now is {index_now}");
                 Array.Copy(buffer, index_now, hash, 0, 32);
+                
                 index_now += 32;
-                locateInfos[l_count] = new FileLocateInfo(locate, hash, count, indexs);
+                locateInfos[l_count] = new FileLocateInfo(locate, hash, countOfIndexs, indexs);
                 l_count++;
             }
+            length = index_now;
             Debug.Assert(index_now == buffer.Length);
         }
     }
@@ -334,6 +369,8 @@ namespace Toy
         }
         public BlockInfoMessage(byte[] buffer)
         {
+            type = P2PMessageType.BLOCK_INFO;
+            length = buffer.Length;
             block = new BlockInfo(buffer);
         }
     }
@@ -357,6 +394,14 @@ namespace Toy
         public CloseMessage()
         {
             type = P2PMessageType.CLOSE;
+            length = 0;
+        }
+    }
+
+    class AliveMessage : P2PMessage {
+        public AliveMessage()
+        {
+            type = P2PMessageType.ALIVE;
             length = 0;
         }
     }
@@ -387,26 +432,27 @@ namespace Toy
             serializer.Serialize(stream, p2PMessage);
             WriteToFile($"{path}\\{p2PMessage.type}", stream.ToArray());
         }
-        static byte[] ReadFromFile(string path)
+        static Tuple<byte[],int> ReadFromFile(string path)
         {
             byte[] ret = new byte[5000];
+            var size = 0;
             using(var sr = File.OpenRead(path))
             {
-                sr.Read(ret, 0, 5000);
+                size = sr.Read(ret, 0, 5000);
             }
-            return ret;
+            return new Tuple<byte[], int>(ret, size);
         }
         static void TestParse(P2PMessage p2PMessage)
         {
             string path = @"C:\Users\ayanamists\source\repos\P2PDownload\P2PDownload\test";
             var i = ReadFromFile($"{path}\\{p2PMessage.type}");
-            var r = P2PMessage.GenFromBuffer(i);
+            var r = P2PMessage.GenFromBuffer(i.Item1, i.Item2);
             var stream = new MemoryStream();
             var serializer = new BinarySerializer();
             serializer.Serialize(stream, p2PMessage);
             WriteToFile($"{path}\\{p2PMessage.type}-2", stream.ToArray());
         }
-        static void Test(string[] args)
+        public static void Test(string[] args)
         {
             Int32[] temp = { 1, 2, 3, 4};
             var hash = SHA256.Create().ComputeHash(new byte[1]);

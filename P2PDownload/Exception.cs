@@ -12,4 +12,12 @@ namespace Toy
     {
         public BlockNotPresentException(string what) : base(what) { }
     }
+    class HasBeenDownloadException : System.Exception
+    {
+        public HasBeenDownloadException(string what) : base(what) { }
+    }
+    class FailToConnectException : System.Exception
+    {
+        public FailToConnectException(string what) : base(what) { }
+    }
 }
